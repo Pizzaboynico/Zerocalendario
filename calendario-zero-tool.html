@@ -243,6 +243,23 @@ const state = {
 function freshViewState(){
   return { format:'feed', layout:'lista', bg:{ presetIndex:-1, videoMode:'loop', frameTime:0 } };
 }
+
+// ---------- autosalvataggio locale (localStorage) ----------
+// Si aggiorna a ogni modifica ai testi o caricamento CSV, così un refresh
+// della pagina non fa perdere il lavoro sullo stesso browser/computer.
+const LOCAL_KEY = 'calendarioZeroTool.autosave.v1';
+function saveLocal(){
+  try{
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({ dayTexts, state }));
+  }catch(e){ console.warn('Autosalvataggio non riuscito', e); }
+}
+function loadLocal(){
+  try{
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){ return null; }
+}
 function currentViewKey(){
   return state.viewMode==='month' ? 'm:'+state.currentMonthKey : 'r:'+state.rangeStart+':'+state.rangeDuration;
 }
@@ -313,19 +330,22 @@ wireSeg('formatSeg', v=>{
   cv.width = f.w; cv.height = f.h;
   fitCanvasPreview();
   render();
+  saveLocal();
 });
-wireSeg('layoutSeg', v=>{ currentState().layout = v; render(); });
+wireSeg('layoutSeg', v=>{ currentState().layout = v; render(); saveLocal(); });
 wireSeg('videoModeSeg', v=>{
   currentState().bg.videoMode = v;
   document.getElementById('frameScrubWrap').style.display = v==='frame' ? '' : 'none';
   updateDownloadLabel();
   applyVideoState();
+  saveLocal();
 });
 
 function onViewChanged(){
   syncControlsFromState();
   renderPresetTiles();
   applyVideoState();
+  saveLocal();
 }
 
 function fitCanvasPreview(){
@@ -339,6 +359,10 @@ function fitCanvasPreview(){
 function syncControlsFromState(){
   const s = currentState();
   document.querySelectorAll('#viewModeSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===state.viewMode));
+  document.getElementById('monthViewFields').style.display = state.viewMode==='month' ? '' : 'none';
+  document.getElementById('rangeViewFields').style.display = state.viewMode==='range' ? '' : 'none';
+  monthSelect.value = state.currentMonthKey;
+  rangeStartInput.value = state.rangeStart;
   document.querySelectorAll('#rangeDurationSeg button').forEach(b=>b.classList.toggle('active', Number(b.dataset.v)===state.rangeDuration));
   document.querySelectorAll('#formatSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===s.format));
   document.querySelectorAll('#layoutSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===s.layout));
@@ -373,6 +397,7 @@ function selectPreset(idx){
   renderPresetTiles();
   updateDownloadLabel();
   applyVideoState();
+  saveLocal();
 }
 
 let rafId = null;
@@ -417,6 +442,7 @@ document.getElementById('reset_bg').addEventListener('click', ()=>{
   renderPresetTiles();
   updateDownloadLabel();
   applyVideoState();
+  saveLocal();
 });
 
 // ---------- pannello dati: CSV + lista completa dell'anno ----------
@@ -473,6 +499,7 @@ document.getElementById('csvUpload').addEventListener('change', e=>{
     }
     renderFullDayList();
     render();
+    saveLocal();
     e.target.value = '';
   };
   reader.readAsText(file, 'UTF-8');
@@ -500,6 +527,7 @@ function renderFullDayList(){
     input.addEventListener('input', ()=>{
       dayTexts[key] = input.value;
       render();
+      saveLocal();
     });
   });
 }
@@ -875,6 +903,11 @@ document.getElementById('downloadBtn').addEventListener('click', async ()=>{
 // ---------- avvio ----------
 window.addEventListener('resize', fitCanvasPreview);
 (async function init(){
+  const saved = loadLocal();
+  if(saved){
+    if(saved.dayTexts) Object.assign(dayTexts, saved.dayTexts);
+    if(saved.state) Object.assign(state, saved.state);
+  }
   try{
     const fontFace = new FontFace(FONT_FAMILY, `url(${FONT_URI})`);
     await fontFace.load();
@@ -883,7 +916,7 @@ window.addEventListener('resize', fitCanvasPreview);
   syncControlsFromState();
   renderPresetTiles();
   renderFullDayList();
-  render();
+  applyVideoState();
 })();
 </script>
 </body>
