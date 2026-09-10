@@ -78,9 +78,11 @@
     background:var(--panel2); padding:6px 8px; border-radius:6px; margin:12px 0 6px;
   }
   .month-group-label:first-child{margin-top:0;}
-  .day-row{display:flex; gap:8px; align-items:center; margin-bottom:6px;}
-  .day-row-label{width:64px; min-width:64px; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;}
-  .day-row input[type=text]{flex:1; padding:6px 8px; font-size:12px;}
+  .day-row{display:flex; gap:8px; align-items:flex-start; margin-bottom:6px;}
+  .day-row-label{width:64px; min-width:64px; margin-top:7px; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;}
+  .day-row-fields{flex:1; display:flex; flex-direction:column; gap:4px;}
+  .day-row input[type=text]{width:100%; padding:6px 8px; font-size:12px;}
+  .day-row input[data-field="info"]{font-size:11px; color:var(--muted);}
 </style>
 </head>
 <body>
@@ -118,16 +120,6 @@
   </fieldset>
 
   <fieldset>
-    <legend>Impaginazione</legend>
-    <div class="seg wrap" id="layoutSeg">
-      <button data-v="lista" class="active">Lista</button>
-      <button data-v="griglia">Griglia</button>
-      <button data-v="tabella">Tabella</button>
-      <button data-v="settimanale">Settimanale</button>
-    </div>
-  </fieldset>
-
-  <fieldset>
     <legend>Sfondo (preset video)</legend>
     <div class="hint">Seleziona quale dei 3 video di sfondo usare per la vista corrente.</div>
     <div class="preset-grid" id="presetGrid"></div>
@@ -156,16 +148,17 @@
   <h3 style="margin:0 0 16px; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Dati serate</h3>
 
   <fieldset>
-    <legend>Excel / CSV</legend>
-    <div class="hint">Scarica il file, compila la colonna "Serata" in Excel, salva e ricaricalo qui. In alternativa modifica i testi direttamente nella lista sotto.</div>
-    <button class="btn" type="button" id="downloadCsvBtn" style="margin-top:10px;">Scarica CSV</button>
-    <label style="margin-top:10px;">Carica CSV compilato</label>
-    <input type="file" id="csvUpload" accept=".csv">
+    <legend>Sincronizzazione online</legend>
+    <div class="hint">Inserisci il codice di accesso per salvare le serate online e ritrovarle da qualsiasi computer. Lascia vuoto per usare solo il salvataggio locale su questo browser.</div>
+    <label style="margin-top:10px;">Codice di accesso</label>
+    <input type="text" id="syncToken" placeholder="codice condiviso dal team">
+    <div id="syncStatus" class="hint" style="margin-top:8px;"></div>
   </fieldset>
 
   <fieldset>
-    <legend>Tutte le serate dell'anno</legend>
-    <div id="fullDayList"></div>
+    <legend>Serate</legend>
+    <div class="hint">Compila solo i giorni con una serata: nel calendario compariranno soltanto le righe che riempi qui. Il secondo campo (più piccolo) è per informazioni aggiuntive facoltative.</div>
+    <div id="fullDayList" style="margin-top:10px;"></div>
   </fieldset>
 </div>
 
@@ -183,10 +176,9 @@ function weekdayOf(date){ return GIORNI_IT[(date.getDay()+6)%7]; }
 function shortLabel(date){ return `${pad2(date.getDate())} ${MESI_ABBR[date.getMonth()]}`; }
 
 // ---------- mesi: settembre 2026 -> agosto 2027 ----------
-const MESI_IT = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
-const MESI_ABBR = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
-const GIORNI_IT = ['Lun','Mar','Mer','Gio','Ven','Sab','Dom'];
-const GIORNI_IT_FULL = ['Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato','Domenica'];
+const MESI_IT = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MESI_ABBR = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const GIORNI_IT = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 function buildMonths(startYear, startMonthIndex, count){
   const months = [];
@@ -241,12 +233,12 @@ const state = {
   perView: {}
 };
 function freshViewState(){
-  return { format:'feed', layout:'lista', bg:{ presetIndex:-1, videoMode:'loop', frameTime:0 } };
+  return { format:'feed', bg:{ presetIndex:-1, videoMode:'loop', frameTime:0 } };
 }
 
 // ---------- autosalvataggio locale (localStorage) ----------
-// Si aggiorna a ogni modifica ai testi o caricamento CSV, così un refresh
-// della pagina non fa perdere il lavoro sullo stesso browser/computer.
+// Si aggiorna a ogni modifica ai testi, così un refresh della pagina non fa
+// perdere il lavoro sullo stesso browser/computer.
 const LOCAL_KEY = 'calendarioZeroTool.autosave.v1';
 function saveLocal(){
   try{
@@ -260,6 +252,66 @@ function loadLocal(){
     return JSON.parse(raw);
   }catch(e){ return null; }
 }
+
+// ---------- sincronizzazione online (Vercel Blob, via /api/serate) ----------
+// Le serate vengono salvate anche online (oltre che in localStorage) quando è
+// presente un codice di accesso, così si può riprendere il lavoro da un altro
+// computer. Il salvataggio remoto è "best effort": se la rete non c'è o il
+// codice è sbagliato, resta comunque valido l'autosalvataggio locale.
+const SYNC_TOKEN_KEY = 'calendarioZeroTool.syncToken.v1';
+const syncTokenInput = document.getElementById('syncToken');
+const syncStatusEl = document.getElementById('syncStatus');
+function getSyncToken(){ return (syncTokenInput.value||'').trim(); }
+function setSyncStatus(text, ok){
+  syncStatusEl.textContent = text;
+  syncStatusEl.style.color = ok===false ? '#ff6b6b' : (ok===true ? '#7ee787' : '');
+}
+async function fetchRemote(){
+  const token = getSyncToken();
+  if(!token) return null;
+  try{
+    const res = await fetch('/api/serate', { headers:{ 'x-sync-token': token } });
+    if(!res.ok){
+      setSyncStatus(res.status===401 ? 'Codice di accesso errato.' : 'Sincronizzazione non disponibile.', false);
+      return null;
+    }
+    const data = await res.json();
+    setSyncStatus(data.updatedAt ? `Sincronizzato (ultimo salvataggio: ${new Date(data.updatedAt).toLocaleString('it-IT')}).` : 'Connesso, nessun dato online ancora.', true);
+    return data;
+  }catch(e){
+    setSyncStatus('Sincronizzazione non disponibile (offline?).', false);
+    return null;
+  }
+}
+let pushRemoteTimer = null;
+function pushRemoteNow(){
+  const token = getSyncToken();
+  if(!token) return;
+  fetch('/api/serate', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'x-sync-token': token },
+    body: JSON.stringify({ dayTexts })
+  }).then(res=>{
+    if(!res.ok){ setSyncStatus(res.status===401 ? 'Codice di accesso errato.' : 'Salvataggio online non riuscito.', false); return; }
+    return res.json();
+  }).then(data=>{
+    if(data && data.updatedAt) setSyncStatus(`Sincronizzato (ultimo salvataggio: ${new Date(data.updatedAt).toLocaleString('it-IT')}).`, true);
+  }).catch(()=>{ setSyncStatus('Salvataggio online non riuscito (offline?).', false); });
+}
+function pushRemote(){
+  clearTimeout(pushRemoteTimer);
+  pushRemoteTimer = setTimeout(pushRemoteNow, 800);
+}
+syncTokenInput.addEventListener('change', async ()=>{
+  try{ localStorage.setItem(SYNC_TOKEN_KEY, syncTokenInput.value||''); }catch(e){}
+  const remote = await fetchRemote();
+  if(remote && remote.dayTexts){
+    Object.assign(dayTexts, remote.dayTexts);
+    renderFullDayList();
+    render();
+    saveLocal();
+  }
+});
 function currentViewKey(){
   return state.viewMode==='month' ? 'm:'+state.currentMonthKey : 'r:'+state.rangeStart+':'+state.rangeDuration;
 }
@@ -332,7 +384,6 @@ wireSeg('formatSeg', v=>{
   render();
   saveLocal();
 });
-wireSeg('layoutSeg', v=>{ currentState().layout = v; render(); saveLocal(); });
 wireSeg('videoModeSeg', v=>{
   currentState().bg.videoMode = v;
   document.getElementById('frameScrubWrap').style.display = v==='frame' ? '' : 'none';
@@ -365,7 +416,6 @@ function syncControlsFromState(){
   rangeStartInput.value = state.rangeStart;
   document.querySelectorAll('#rangeDurationSeg button').forEach(b=>b.classList.toggle('active', Number(b.dataset.v)===state.rangeDuration));
   document.querySelectorAll('#formatSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===s.format));
-  document.querySelectorAll('#layoutSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===s.layout));
   document.querySelectorAll('#videoModeSeg button').forEach(b=>b.classList.toggle('active', b.dataset.v===s.bg.videoMode));
   document.getElementById('frameScrubWrap').style.display = s.bg.videoMode==='frame' ? '' : 'none';
   const f = FORMATS[s.format];
@@ -445,66 +495,11 @@ document.getElementById('reset_bg').addEventListener('click', ()=>{
   saveLocal();
 });
 
-// ---------- pannello dati: CSV + lista completa dell'anno ----------
-function csvEscape(s){
-  s = String(s??'');
-  if(/[",\n\r]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
-  return s;
+// ---------- pannello dati: lista completa dell'anno ----------
+function dayEntry(key){
+  if(!dayTexts[key] || typeof dayTexts[key]!=='object') dayTexts[key] = { name:'', info:'' };
+  return dayTexts[key];
 }
-function buildCsv(){
-  const rows = [['Data','Giorno','Serata']];
-  MONTHS.forEach(m=> m.days.forEach(d=> rows.push([d.dateKey, d.weekday, dayTexts[d.dateKey]||''])));
-  return rows.map(r=>r.map(csvEscape).join(',')).join('\r\n');
-}
-function parseCsv(text){
-  const rows = [];
-  let row = [], field = '', inQuotes = false;
-  for(let i=0;i<text.length;i++){
-    const c = text[i];
-    if(inQuotes){
-      if(c === '"'){ if(text[i+1] === '"'){ field+='"'; i++; } else inQuotes = false; }
-      else field += c;
-    } else {
-      if(c === '"') inQuotes = true;
-      else if(c === ','){ row.push(field); field=''; }
-      else if(c === '\n' || c === '\r'){
-        if(c==='\r' && text[i+1]==='\n') i++;
-        row.push(field); field=''; rows.push(row); row=[];
-      } else field += c;
-    }
-  }
-  if(field.length || row.length){ row.push(field); rows.push(row); }
-  return rows.filter(r=> r.length>1 || r[0]!=='');
-}
-document.getElementById('downloadCsvBtn').addEventListener('click', ()=>{
-  const csv = buildCsv();
-  const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
-  const a = document.createElement('a');
-  a.download = 'Calendario-ZERO_serate.csv';
-  a.href = URL.createObjectURL(blob);
-  a.click();
-});
-document.getElementById('csvUpload').addEventListener('change', e=>{
-  const file = e.target.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    const rows = parseCsv(reader.result);
-    let start = 0;
-    if(rows[0] && /data/i.test(rows[0][0])) start = 1;
-    for(let i=start;i<rows.length;i++){
-      const dateKey = (rows[i][0]||'').trim();
-      const serata = (rows[i][2]||'').trim();
-      if(!dateKey) continue;
-      dayTexts[dateKey] = serata;
-    }
-    renderFullDayList();
-    render();
-    saveLocal();
-    e.target.value = '';
-  };
-  reader.readAsText(file, 'UTF-8');
-});
-
 function renderFullDayList(){
   const el = document.getElementById('fullDayList');
   el.innerHTML = '';
@@ -517,17 +512,21 @@ function renderFullDayList(){
       const row = document.createElement('div');
       row.className = 'day-row';
       row.innerHTML = `<div class="day-row-label">${d.weekday.toUpperCase()} ${pad2(d.day)}</div>
-        <input type="text" data-key="${d.dateKey}" placeholder="Nome serata">`;
+        <div class="day-row-fields">
+          <input type="text" data-key="${d.dateKey}" data-field="name" placeholder="Nome serata">
+          <input type="text" data-key="${d.dateKey}" data-field="info" placeholder="Info aggiuntive (opzionale)">
+        </div>`;
       el.appendChild(row);
     });
   });
   el.querySelectorAll('input[data-key]').forEach(input=>{
-    const key = input.dataset.key;
-    input.value = dayTexts[key] || '';
+    const key = input.dataset.key, field = input.dataset.field;
+    input.value = dayEntry(key)[field] || '';
     input.addEventListener('input', ()=>{
-      dayTexts[key] = input.value;
+      dayEntry(key)[field] = input.value;
       render();
       saveLocal();
+      pushRemote();
     });
   });
 }
@@ -553,7 +552,7 @@ function render(){
   ctx.textBaseline = 'alphabetic';
   const marginX = 40, marginY = 40;
 
-  // Il contenuto (titolo, lista/griglia) mantiene sempre le proporzioni del
+  // Il contenuto (titolo, lista) mantiene sempre le proporzioni del
   // formato Feed: la Story si limita ad allungare lo sfondo sopra e sotto,
   // il blocco di testo resta identico e viene solo centrato verticalmente.
   const FEED_H = FORMATS.feed.h;
@@ -564,10 +563,7 @@ function render(){
   const titleBottom = drawTitle(period, W, marginX, marginY);
   const top = titleBottom + 55, bottom = FEED_H - marginY;
 
-  if(s.layout==='lista'){ renderLista(period,marginX,W,top,bottom); }
-  else if(s.layout==='griglia'){ renderGriglia(period,marginX,W,top,bottom); }
-  else if(s.layout==='tabella'){ renderTabella(period,marginX,W,top,bottom); }
-  else { renderSettimanale(period,marginX,W,top,bottom); }
+  renderLista(period,marginX,W,top,bottom);
 
   ctx.restore();
 }
@@ -612,236 +608,81 @@ function drawTitle(period, W, marginX, marginY){
   return baseline;
 }
 
-function renderLista(period,marginX,W,top,bottom){
-  const days = period.days;
-  const rowH = (bottom-top)/days.length;
-  const fontDay = Math.min(30, rowH*0.55);
-  const fontEvent = Math.min(28, rowH*0.5);
-  ctx.textAlign = 'left';
-  days.forEach((d,i)=>{
-    const y = top + i*rowH + rowH*0.68;
-    const label = `${pad2(d.day)} ${d.weekday.toUpperCase()}` + (d.monthAbbr ? ` ${d.monthAbbr.toUpperCase()}` : '');
-    ctx.font = `${fontDay}px "${FONT_FAMILY}"`;
-    ctx.fillStyle = INK;
-    ctx.fillText(label, marginX, y);
-    const text = dayTexts[d.dateKey] || '';
-    if(text){
-      ctx.font = `${fontEvent}px "${FONT_FAMILY}"`;
-      ctx.textAlign = 'right';
-      ctx.fillText(text.toUpperCase(), W-marginX, y);
-      ctx.textAlign = 'left';
-    }
-    if(i<days.length-1){
-      ctx.globalAlpha = 0.25;
-      ctx.beginPath(); ctx.moveTo(marginX, top+(i+1)*rowH); ctx.lineTo(W-marginX, top+(i+1)*rowH); ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  });
-}
-
-// La dimensione del testo evento in griglia è fissa per tutte le viste: viene
-// calcolata una sola volta in modo che la parola più lunga tipica ("PREMIERE")
-// arrivi esattamente al bordo della cella.
-let GRID_EVENT_SIZE = null;
-function getGridEventFontSize(cellW){
-  if(GRID_EVENT_SIZE) return GRID_EVENT_SIZE;
-  const maxW = cellW - 20;
-  let size = 40;
-  while(size>8){
+// Riduce la dimensione del font finché il testo su una sola riga sta entro
+// maxWidth, senza andare sotto minSize.
+function fitSingleLine(text, maxWidth, baseSize, minSize=10){
+  let size = baseSize;
+  while(size>minSize){
     ctx.font = `${size}px "${FONT_FAMILY}"`;
-    if(ctx.measureText('PREMIERE').width<=maxW) break;
+    if(ctx.measureText(text).width<=maxWidth) break;
     size -= 1;
   }
-  GRID_EVENT_SIZE = size;
   return size;
 }
 
-function renderGriglia(period,marginX,W,top,bottom){
-  const cols = 7, gridW = W-marginX*2;
-  const cellW = gridW/cols;
-  const rows = Math.ceil((period.firstDow + period.days.length)/cols);
-  const cellH = (bottom-top-40)/rows;
-  const eventSize = getGridEventFontSize(cellW);
-
-  ctx.textAlign = 'center';
-  ctx.font = `22px "${FONT_FAMILY}"`;
-  ctx.fillStyle = INK;
-  GIORNI_IT.forEach((g,i)=>{
-    ctx.fillText(g.toUpperCase(), marginX + cellW*i + cellW/2, top+20);
+// Mostra solo i giorni con una serata inserita (nome compilato): le righe
+// vuote non compaiono. Le dimensioni dei font si adattano al numero di
+// serate presenti, così poche righe restano leggibili e grandi mentre tante
+// righe si restringono per stare tutte nello spazio disponibile.
+function renderLista(period,marginX,W,top,bottom){
+  const days = period.days.filter(d=>{
+    const e = dayTexts[d.dateKey];
+    return e && typeof e==='object' && (e.name||'').trim();
   });
 
-  const gridTop = top+40;
-  period.days.forEach((d,i)=>{
-    const idx = period.firstDow + i;
-    const col = idx % cols, row = Math.floor(idx/cols);
-    const cx = marginX + col*cellW, cy = gridTop + row*cellH;
-
-    ctx.strokeStyle = INK; ctx.globalAlpha = 0.2; ctx.lineWidth = 3;
-    ctx.strokeRect(cx, cy, cellW, cellH);
-    ctx.globalAlpha = 1;
-
-    ctx.textAlign = 'left';
-    ctx.font = `26px "${FONT_FAMILY}"`;
-    ctx.fillStyle = INK;
-    const dayLabel = (d.monthAbbr && d.day===1) ? `${d.day} ${d.monthAbbr}` : String(d.day);
-    ctx.fillText(dayLabel, cx+10, cy+32);
-
-    const text = dayTexts[d.dateKey] || '';
-    if(text){
-      const padX = 10, padBottom = 12, textTop = cy+48;
-      const maxWidth = cellW - padX*2;
-      const maxHeight = (cy+cellH-padBottom) - textTop;
-      const fit = fitEventText(text.toUpperCase(), maxWidth, maxHeight, eventSize);
-      ctx.textAlign = 'left';
-      ctx.fillStyle = INK;
-      const lastBaseline = cy+cellH-padBottom;
-      fit.lines.forEach((line,li)=>{
-        const y = lastBaseline - (fit.lines.length-1-li)*fit.lineHeight;
-        ctx.font = `${fit.size}px "${FONT_FAMILY}"`;
-        ctx.fillText(line, cx+padX, y);
-      });
-    }
-  });
-}
-
-// Impaginazione "a schede": mostra solo i giorni con una serata compilata,
-// data in un riquadro grande a sinistra ed evento in un riquadro a destra.
-// Risolve il problema del testo troppo piccolo quando pochi giorni sono pieni.
-function renderTabella(period,marginX,W,top,bottom){
-  const filled = period.days.filter(d=> (dayTexts[d.dateKey]||'').trim());
-  if(!filled.length){
+  if(!days.length){
     ctx.textAlign = 'center';
-    ctx.font = `24px "${FONT_FAMILY}"`;
     ctx.fillStyle = INK;
-    ctx.fillText('nessuna serata compilata', W/2, (top+bottom)/2);
+    ctx.globalAlpha = 0.4;
+    ctx.font = `24px "${FONT_FAMILY}"`;
+    ctx.fillText('nessuna serata inserita', W/2, (top+bottom)/2);
+    ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
     return;
   }
-  const rowGap = 16;
-  const rowH = Math.min(150, (bottom-top-rowGap*(filled.length-1))/filled.length);
-  const boxW = 130;
-  let y = top;
-  filled.forEach(d=>{
-    ctx.strokeStyle = INK; ctx.globalAlpha = 0.4; ctx.lineWidth = 2.5;
-    ctx.strokeRect(marginX, y, boxW, rowH);
-    ctx.globalAlpha = 1;
-    ctx.textAlign = 'center'; ctx.fillStyle = INK;
-    ctx.font = `${Math.min(16, rowH*0.14)}px "${FONT_FAMILY}"`;
-    ctx.fillText(d.weekday.toUpperCase()+(d.monthAbbr?' '+d.monthAbbr.toUpperCase():''), marginX+boxW/2, y+rowH*0.38);
-    ctx.font = `${Math.min(44, rowH*0.4)}px "${FONT_FAMILY}"`;
-    ctx.fillText(pad2(d.day), marginX+boxW/2, y+rowH*0.78);
 
-    const evX = marginX+boxW+16, evW = W-marginX-evX;
-    ctx.strokeStyle = INK; ctx.globalAlpha = 0.4; ctx.lineWidth = 2.5;
-    ctx.strokeRect(evX, y, evW, rowH);
-    ctx.globalAlpha = 1;
-    const fit = fitEventText((dayTexts[d.dateKey]||'').toUpperCase(), evW-28, rowH-24, Math.min(30, rowH*0.26));
+  const rowH = (bottom-top)/days.length;
+  const fontDay = Math.max(16, Math.min(44, rowH*0.42));
+  const fontEvent = Math.max(16, Math.min(44, rowH*0.42));
+  const fontInfo = Math.max(10, Math.min(18, rowH*0.16));
+  const gap = 24;
+  const cap1 = s=> s.charAt(0).toUpperCase()+s.slice(1);
+
+  ctx.textAlign = 'left';
+  days.forEach((d,i)=>{
+    const entry = dayTexts[d.dateKey];
+    const rowTop = top + i*rowH;
+    const baseline = rowTop + fontDay*0.95;
+
+    const label = `[${pad2(d.day)} ${d.weekday}` + (d.monthAbbr ? ` ${cap1(d.monthAbbr)}` : '') + `]`;
+    ctx.font = `${fontDay}px "${FONT_FAMILY}"`;
+    ctx.fillStyle = INK;
+    ctx.fillText(label, marginX, baseline);
+    const labelW = ctx.measureText(label).width;
+
+    const availW = W - marginX*2 - labelW - gap;
+    const name = (entry.name||'').toUpperCase();
+    const nameSize = fitSingleLine(name, availW, fontEvent);
+    ctx.font = `${nameSize}px "${FONT_FAMILY}"`;
+    ctx.textAlign = 'right';
+    ctx.fillText(name, W-marginX, baseline);
+
+    const info = (entry.info||'').trim();
+    if(info){
+      const infoSize = fitSingleLine(info, W-marginX*2, fontInfo);
+      ctx.font = `${infoSize}px "${FONT_FAMILY}"`;
+      ctx.globalAlpha = 0.6;
+      ctx.fillText(info, W-marginX, baseline + infoSize*1.5);
+      ctx.globalAlpha = 1;
+    }
     ctx.textAlign = 'left';
-    const totalH = fit.lines.length*fit.lineHeight;
-    const firstBaseline = y + (rowH-totalH)/2 + fit.lineHeight*0.8;
-    fit.lines.forEach((line,li)=>{
-      ctx.font = `${fit.size}px "${FONT_FAMILY}"`;
-      ctx.fillText(line, evX+14, firstBaseline + li*fit.lineHeight);
-    });
 
-    y += rowH+rowGap;
-  });
-}
-
-// Impaginazione "settimanale": un giorno per riga, etichetta del giorno in
-// pillola e nome serata molto grande sotto — stile locandina residency.
-function renderSettimanale(period,marginX,W,top,bottom){
-  const rowH = (bottom-top)/period.days.length;
-  period.days.forEach((d,i)=>{
-    const y = top + i*rowH;
-    const idx = GIORNI_IT.indexOf(d.weekday);
-    const dayName = (GIORNI_IT_FULL[idx]||d.weekday) + (d.monthAbbr?' · '+pad2(d.day)+' '+d.monthAbbr:'');
-
-    ctx.font = `${Math.min(20, rowH*0.16)}px "${FONT_FAMILY}"`;
-    const pillLabel = dayName.toUpperCase();
-    const pillPadX = 14, pillH = Math.min(20,rowH*0.16)*1.8;
-    const pillW = ctx.measureText(pillLabel).width + pillPadX*2;
-    const pillY = y + rowH*0.12;
-    ctx.strokeStyle = INK; ctx.globalAlpha = 0.5; ctx.lineWidth = 1.5;
-    ctx.strokeRect(marginX, pillY, pillW, pillH);
-    ctx.globalAlpha = 1;
-    ctx.textAlign = 'left'; ctx.fillStyle = INK;
-    ctx.fillText(pillLabel, marginX+pillPadX, pillY+pillH*0.68);
-
-    const text = dayTexts[d.dateKey] || '—';
-    const textTop = pillY+pillH+ (rowH*0.08);
-    const textMaxH = (top + (i+1)*rowH) - textTop - (rowH*0.1);
-    const fit = fitEventText(text.toUpperCase(), W-marginX*2, textMaxH, Math.min(64, rowH*0.5));
-    fit.lines.forEach((line,li)=>{
-      ctx.font = `${fit.size}px "${FONT_FAMILY}"`;
-      ctx.fillText(line, marginX, textTop + fit.lineHeight*0.85 + li*fit.lineHeight);
-    });
-
-    if(i<period.days.length-1){
-      ctx.globalAlpha = 0.15;
-      ctx.beginPath(); ctx.moveTo(marginX, top+(i+1)*rowH); ctx.lineTo(W-marginX, top+(i+1)*rowH); ctx.stroke();
+    if(i<days.length-1){
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath(); ctx.moveTo(marginX, rowTop+rowH); ctx.lineTo(W-marginX, rowTop+rowH); ctx.stroke();
       ctx.globalAlpha = 1;
     }
   });
-}
-
-// Spezza il testo su più righe (parola per parola, e carattere per carattere
-// se una singola parola è più larga della cella) senza mai superare maxWidth.
-function wrapLines(text, maxWidth){
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let cur = '';
-  words.forEach(word=>{
-    if(ctx.measureText(word).width > maxWidth){
-      if(cur){ lines.push(cur); cur=''; }
-      let chunk = '';
-      for(const ch of word){
-        const test = chunk+ch;
-        if(ctx.measureText(test).width > maxWidth && chunk){
-          lines.push(chunk);
-          chunk = ch;
-        } else {
-          chunk = test;
-        }
-      }
-      cur = chunk;
-      return;
-    }
-    const test = cur ? cur+' '+word : word;
-    if(ctx.measureText(test).width > maxWidth && cur){
-      lines.push(cur);
-      cur = word;
-    } else {
-      cur = test;
-    }
-  });
-  if(cur) lines.push(cur);
-  return lines;
-}
-
-// Calcola la dimensione più grande (fino a baseSize) e le righe risultanti
-// che stanno entro maxWidth x maxHeight; se anche al minimo non basta,
-// tronca l'ultima riga visibile con "…".
-function fitEventText(text, maxWidth, maxHeight, baseSize){
-  const minSize = 10;
-  let size = baseSize, lines, lineHeight;
-  while(size>=minSize){
-    ctx.font = `${size}px "${FONT_FAMILY}"`;
-    lines = wrapLines(text, maxWidth);
-    lineHeight = size*1.15;
-    if(lines.length*lineHeight <= maxHeight) break;
-    size -= 1;
-  }
-  ctx.font = `${size}px "${FONT_FAMILY}"`;
-  lineHeight = size*1.15;
-  const maxLines = Math.max(1, Math.floor(maxHeight/lineHeight));
-  if(lines.length > maxLines){
-    lines = lines.slice(0, maxLines);
-    let last = lines[maxLines-1];
-    while(last.length>1 && ctx.measureText(last+'…').width>maxWidth) last = last.slice(0,-1);
-    lines[maxLines-1] = last + '…';
-  }
-  return { size, lines, lineHeight };
 }
 
 // ---------- download / export ----------
@@ -863,7 +704,7 @@ document.getElementById('downloadBtn').addEventListener('click', async ()=>{
 
   if(!isVideoLoopActive()){
     const a = document.createElement('a');
-    a.download = `Calendario-ZERO_${period.fileLabel}_${s.format}_${s.layout}.png`;
+    a.download = `Calendario-ZERO_${period.fileLabel}_${s.format}.png`;
     a.href = cv.toDataURL('image/png');
     a.click();
     return;
@@ -893,7 +734,7 @@ document.getElementById('downloadBtn').addEventListener('click', async ()=>{
   const ext = mime.includes('mp4') ? 'mp4' : 'webm';
   const blob = new Blob(chunks, {type:mime});
   const a = document.createElement('a');
-  a.download = `Calendario-ZERO_${period.fileLabel}_${s.format}_${s.layout}.${ext}`;
+  a.download = `Calendario-ZERO_${period.fileLabel}_${s.format}.${ext}`;
   a.href = URL.createObjectURL(blob);
   a.click();
 
@@ -908,6 +749,10 @@ window.addEventListener('resize', fitCanvasPreview);
     if(saved.dayTexts) Object.assign(dayTexts, saved.dayTexts);
     if(saved.state) Object.assign(state, saved.state);
   }
+  // Migrazione dati salvati col vecchio formato (stringa semplice invece di {name, info}).
+  Object.keys(dayTexts).forEach(key=>{
+    if(typeof dayTexts[key]==='string') dayTexts[key] = { name: dayTexts[key], info:'' };
+  });
   try{
     const fontFace = new FontFace(FONT_FAMILY, `url(${FONT_URI})`);
     await fontFace.load();
@@ -917,6 +762,17 @@ window.addEventListener('resize', fitCanvasPreview);
   renderPresetTiles();
   renderFullDayList();
   applyVideoState();
+
+  try{ syncTokenInput.value = localStorage.getItem(SYNC_TOKEN_KEY) || ''; }catch(e){}
+  if(getSyncToken()){
+    const remote = await fetchRemote();
+    if(remote && remote.dayTexts){
+      Object.assign(dayTexts, remote.dayTexts);
+      renderFullDayList();
+      render();
+      saveLocal();
+    }
+  }
 })();
 </script>
 </body>

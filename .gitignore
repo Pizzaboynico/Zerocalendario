@@ -1,2 +1,4 @@
 .DS_Store
 VIBE SOCIAL POST/
+node_modules/
+.vercel
